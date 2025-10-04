@@ -136,6 +136,40 @@ export const BattleSound = new class {
 		}
 	}
 
+	/**
+	 * Plays a Pokémon cry with specific speed and pitch adjustments based on its status and generation.
+	 * @param cryUrl The URL of the Pokémon's cry audio file.
+	 * @param isActive True if the Pokémon is active, false if fainted.
+	 * @param generation The generation of the Pokémon (e.g., 1 for Gen 1, 9 for Gen 9+).
+	 */
+	playCry(cryUrl: string, isActive: boolean, generation: number) {
+		if (!cryUrl || this.muted) return;
+
+		const cry = this.getSound(cryUrl);
+		if (!cry) return;
+
+		cry.volume = this.effectVolume / 100;
+
+		if (isActive) {
+			// If active: 1x speed, 0 semitone pitch (natural pitch at 1x playbackRate)
+			cry.playbackRate = 1;
+		} else { // Fainted
+			if (generation >= 1 && generation <= 8) {
+				// If fainted and Generation is 1-8: 5/6x speed.
+				// Pitch naturally changes with playbackRate (equivalent to 12 * log2(Playback Rate) semitones).
+				cry.playbackRate = 5 / 6; // approx 0.833
+			} else if (generation >= 9) {
+				// If fainted and Generation is 9+: 0.75x speed, auto-pitch.
+				// Auto-pitch means the pitch naturally shifts with playbackRate.
+				cry.playbackRate = 0.75;
+			} else {
+				// Fallback for unexpected generation, play at normal speed
+				cry.playbackRate = 1;
+			}
+		}
+		cry.play();
+	}
+
 	/** loopstart and loopend are in milliseconds */
 	loadBgm(url: string, loopstart: number, loopend: number, replaceBGM?: BattleBGM | null) {
 		if (replaceBGM) {
