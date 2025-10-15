@@ -53,7 +53,8 @@ export class BattleBGM {
 		if (this !== BattleSound.currentBgm()) return;
 		if (this.isActuallyPlaying) return;
 
-		if (!this.sound) this.sound = BattleSound.getSound(this.url);
+		// BGM always plays at 1x speed, so playbackRate is 1
+		if (!this.sound) this.sound = BattleSound.getSound(this.url, BattleSound.bgmVolume, 1);
 		if (!this.sound) return;
 		if (this.willRewind) this.sound.currentTime = 0;
 		this.willRewind = false;
@@ -102,7 +103,8 @@ export class BattleBGM {
 }
 
 export const BattleSound = new class {
-	soundCache: { [url: string]: HTMLAudioElement | undefined } = {};
+	// Sound cache now includes playbackRate in the key
+	soundCache: { [key: string]: HTMLAudioElement | undefined } = {};
 
 	bgm: BattleBGM[] = [];
 
@@ -111,29 +113,93 @@ export const BattleSound = new class {
 	bgmVolume = 50;
 	muted = false;
 
-	getSound(url: string) {
+	/**
+	 * Retrieves or creates an HTMLAudioElement.
+	 * The cache key now incorporates the playbackRate to allow different speed versions of the same audio.
+	 * @param url The URL of the sound file.
+	 * @param initialVolume The initial volume (0-100) for the sound.
+	 * @param initialPlaybackRate The initial playback rate (default is 1).
+	 */
+	getSound(url: string, initialVolume: number, initialPlaybackRate: number = 1) {
 		if (!window.HTMLAudioElement) return;
-		if (this.soundCache[url]) return this.soundCache[url];
+		const cacheKey = `${url}-${initialPlaybackRate}`;
+		if (this.soundCache[cacheKey]) {
+			const sound = this.soundCache[cacheKey];
+			if (sound) {
+				// Ensure volume is correctly set for a cached sound
+				sound.volume = initialVolume / 100;
+				// Playback rate is part of the cache key, so it should already be correct
+			}
+			return sound;
+		}
 		try {
 			const sound = document.createElement('audio');
 			sound.src = `https://${Config.routes.client}/${url}`;
-			sound.volume = this.effectVolume / 100;
-			this.soundCache[url] = sound;
+			sound.volume = initialVolume / 100;
+			sound.playbackRate = initialPlaybackRate; // Set playback rate when created
+			this.soundCache[cacheKey] = sound;
 			return sound;
 		} catch {}
 	}
 
 	playEffect(url: string) {
-		this.playSound(url, this.muted ? 0 : this.effectVolume);
+		// Effects typically play at 1x speed
+		this.playSound(url, this.muted ? 0 : this.effectVolume, 1);
 	}
 
-	playSound(url: string, volume: number) {
-		if (!volume) return;
-		const effect = this.getSound(url);
+	/**
+	 * Plays a sound with a given URL, volume, and playback rate.
+	 * @param url The URL of the sound file.
+	 * @param volume The volume (0-100) for the sound.
+	 * @param playbackRate The playback rate (default is 1).
+	 */
+	playSound(url: string, volume: number, playbackRate: number = 1) {
+		if (!volume) return; // If volume is 0, don't play
+		const effect = this.getSound(url, volume, playbackRate);
 		if (effect) {
-			effect.volume = volume / 100;
+			effect.currentTime = 0; // Always rewind for one-shot effects like cries or standard effects
 			effect.play();
 		}
+	}
+
+	/**
+	 * Plays a Pokémon's cry with appropriate speed and volume based on its fainted status and game generation.
+	 * @param pokemonId The ID of the Pokémon (e.g., 'pikachu').
+	 * @param isFainted True if the Pokémon is fainted, false otherwise.
+	 * @param generation The game generation (e.g., 8, 9).
+	 * @returns The calculated semitones for the cry's playback rate, or null if unable to play.
+	 */
+	playCry(pokemonId: string, isFainted: boolean, generation: number): number | null {
+		if (!window.HTMLAudioElement || this.muted) return null;
+
+		// Assuming cry files are located in a 'cries/' directory relative to the client base URL
+		const cryUrl = `cries/${pokemonId}.mp3`;
+
+		let playbackRate: number;
+		if (isFainted) {
+			// Fainting cries: 5/6x speed in Gen 1-8 and 3/4x speed in Gen 9+
+			playbackRate = (generation >= 9) ? 3 / 4 : 5 / 6;
+		} else {
+			// Active Cries: 1x speed if Pokemon is not fainted
+			playbackRate = 1;
+		}
+
+		const cryVolume = this.effectVolume; // Cries use the effect volume setting
+
+		this.playSound(cryUrl, cryVolume, playbackRate); // Use playSound to handle playing and caching
+
+		// Calculate and return the semitones
+		return this.calculateSemitones(playbackRate);
+	}
+
+	/**
+	 * Calculates the number of semitones from a given playback rate.
+	 * Formula: 12 * log2(Playback Rate / 1)
+	 * @param playbackRate The playback rate of the audio.
+	 * @returns The number of semitones.
+	 */
+	calculateSemitones(playbackRate: number): number {
+		return 12 * (Math.log2(playbackRate));
 	}
 
 	/** loopstart and loopend are in milliseconds */
@@ -185,10 +251,12 @@ export const BattleSound = new class {
 if (typeof PS === 'object') {
 	PS.prefs.subscribeAndRun(key => {
 		if (!key || key === 'musicvolume' || key === 'effectvolume' || key === 'mute') {
-			BattleSound.effectVolume = PS.prefs.effectvolume;
-			BattleSound.bgmVolume = PS.prefs.musicvolume;
-			BattleSound.muted = PS.prefs.mute;
-			BattleBGM.update();
+			// Note: PS.prefs.effectvolume and musicvolume are expected to be 0-100 'loudness percent'
+			// and will be converted to 'amplitude percent' by the setters.
+			BattleSound.setEffectVolume(PS.prefs.effectvolume);
+			BattleSound.setBgmVolume(PS.prefs.musicvolume);
+			BattleSound.setMute(PS.prefs.mute);
+			// BattleBGM.update() is called by setBgmVolume and setMute
 		}
 	});
 }
