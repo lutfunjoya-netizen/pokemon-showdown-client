@@ -44,6 +44,8 @@ export class ChatRoom extends PSRoom {
 	challengeMenuOpen = false;
 	initialSlash = false;
 	challenging: Challenge | null = null;
+	/** True after challenge send/accept before server acknowledgement */
+	teamSent: string | null = null;
 	challenged: Challenge | null = null;
 	/** n.b. this will be null outside of battle rooms */
 	battle: Battle | null = null;
@@ -68,8 +70,12 @@ export class ChatRoom extends PSRoom {
 	}
 	override connect() {
 		if (!this.connected || this.connected === 'autoreconnect') {
-			if (this.pmTarget === null) PS.send(`/join ${this.id}`);
-			this.connected = true;
+			if (this.pmTarget === null) {
+				PS.send(`/join ${this.id}`);
+				this.connected = true;
+			} else {
+				this.connected = 'client-only';
+			}
 			this.connectWhenLoggedIn = false;
 		}
 	}
@@ -133,16 +139,26 @@ export class ChatRoom extends PSRoom {
 			if (args[0] === 'c:') PS.lastMessageTime = args[1];
 			this.lastMessage = args;
 			this.joinLeave = null;
-			this.markUserActive(args[args[0] === 'c:' ? 2 : 1]);
+			const name = args[args[0] === 'c:' ? 2 : 1];
+			this.markUserActive(name);
 			if (this.tour) this.tour.joinLeave = null;
 			if (this.id.startsWith("dm-")) {
 				const fromUser = args[args[0] === 'c:' ? 2 : 1];
 				if (toID(fromUser) === PS.user.userid) break;
 				const message = args[args[0] === 'c:' ? 3 : 2];
-				this.notify({
-					title: `${this.title}`,
-					body: message,
-				});
+				const noNotify = this.log?.parseChatMessage(message, name, args[1])?.[2];
+				const isIgnored = PS.prefs.ignore?.[toID(fromUser)];
+				if (!noNotify && !isIgnored) {
+					let textContent = message;
+					if (/^\/(log|raw|html|uhtml|uhtmlchange) /.test(message)) {
+						textContent = message.split(' ').slice(1).join(' ')
+							.replace(/<[^>]*?>/g, '');
+					}
+					this.notify({
+						title: `${this.title}`,
+						body: textContent,
+					});
+				}
 			} else {
 				this.subtleNotify();
 			}
@@ -184,6 +200,14 @@ export class ChatRoom extends PSRoom {
 					if (!lines[i - 1]) cutOffEnd = i - 1;
 				}
 			}
+			console.log("Reconnection log splice:");
+			console.log([
+				...lines.slice(0, cutOffStart),
+				'====================',
+				...lines.slice(cutOffStart, cutOffEnd),
+				'====================',
+				...lines.slice(cutOffEnd),
+			].join('\n'));
 			lines = lines.slice(cutOffStart, cutOffEnd);
 
 			if (lines.length) {
@@ -302,8 +326,20 @@ export class ChatRoom extends PSRoom {
 	override clientCommands = this.parseClientCommands({
 		'chall,challenge'(target) {
 			if (target) {
-				const [targetUser, format] = target.split(',');
-				PS.join(`challenge-${toID(targetUser)}` as RoomID);
+				let [targetUser, format] = target.split(',');
+				if (this.pmTarget && (format === undefined || targetUser.includes('@@@'))) {
+					format = target;
+					targetUser = this.pmTarget;
+				}
+				format = BattleLog.formatId(format || '');
+				PS.mainmenu.makeQuery('userdetails', targetUser).then(data => {
+					if (data.rooms === false) return this.errorReply('This player does not exist or is not online.');
+					PS.join(`challenge-${toID(targetUser)}` as RoomID, { args: { format } });
+				});
+				return;
+			}
+			if (this.challengeMenuOpen) {
+				this.cancelChallenge();
 				return;
 			}
 			this.openChallenge();
@@ -313,12 +349,47 @@ export class ChatRoom extends PSRoom {
 		},
 		'reject'(target) {
 			this.challenged = null;
+			this.teamSent = null;
 			this.update(null);
 			this.sendDirect(`/reject ${target}`);
 		},
 		'clear'() {
 			this.log?.reset();
 			this.update(null);
+		},
+		'togglemessages'(target) {
+			if (this.pmTarget ||
+				this.type !== 'chat') return this.errorReply('This command can only be used in proper chat rooms.');
+			if (this.log) {
+				const userid = toID(target);
+				const classStart = 'revealed chat chatmessage-' + userid;
+				const nodes: HTMLElement[] = [];
+				let isHidden = true;
+				for (const node of this.log.innerElem.childNodes as any as HTMLElement[]) {
+					if (node.className && (node.className + ' ').startsWith(classStart)) {
+						nodes.push(node);
+					}
+				}
+				if (this.log.preemptElem) {
+					for (const node of this.log.preemptElem.childNodes as any as HTMLElement[]) {
+						if (node.className && (node.className + ' ').startsWith(classStart)) {
+							nodes.push(node);
+						}
+					}
+				}
+				isHidden = nodes[0].style.display === 'none';
+				nodes.every(node => {
+					node.style.display = isHidden ? '' : 'none';
+					return true;
+				});
+				isHidden = !isHidden;
+				const toggleButtons = this.log.innerElem.querySelectorAll(`button[name="toggleMessages"][value="${userid}"]`);
+				for (const button of toggleButtons) {
+					button.innerHTML = isHidden ?
+						`<small>(${nodes.length} line${nodes.length > 1 ? 's' : ''} from ${userid} hidden)</small>` :
+						`<small>(Hide ${nodes.length} line${nodes.length > 1 ? 's' : ''} from ${userid})</small>`;
+				}
+			}
 		},
 		'rank,ranking,rating,ladder'(target) {
 			let arg = target;
@@ -450,17 +521,33 @@ export class ChatRoom extends PSRoom {
 			this.battle.pause();
 			this.update(null);
 		},
-		'ffto,fastfowardto'(target) {
+		'ffto,fastfowardto'(target, cmd, parentElem) {
 			if (!this.battle) return this.add('|error|You are not in a battle');
+			if (!target) {
+				PS.prompt("Turn number?", {
+					defaultValue: `${this.battle.turn}`,
+					type: 'numeric',
+					okButton: 'Go',
+					parentElem,
+				}).then(turnNum => {
+					if (turnNum?.trim()) this.send(`/ffto ${turnNum}`, parentElem);
+				});
+				return;
+			}
+
 			let turnNum = Number(target);
 			if (target.startsWith('+') || turnNum < 0) {
-				turnNum += this.battle.turn;
+				turnNum += this.battle.seeking ?? this.battle.turn;
 				if (turnNum < 0) turnNum = 0;
 			} else if (target === 'end') {
 				turnNum = Infinity;
 			}
 			if (isNaN(turnNum)) {
-				this.receiveLine([`error`, `/ffto - Invalid turn number: ${target}`]);
+				this.errorReply(`Invalid turn number: ${target}`);
+				return;
+			}
+			if (this.battle.hardcoreMode) {
+				this.errorReply(`Turn navigation is disabled in hardcore mode.`);
 				return;
 			}
 			this.battle.seekTurn(turnNum);
@@ -519,13 +606,15 @@ export class ChatRoom extends PSRoom {
 			this.add(`|error|Can only be used in a PM.`);
 			return;
 		}
-		if (this.challenging) {
+		if ((this.teamSent && this.challengeMenuOpen) || this.challenging) {
 			this.sendDirect('/cancelchallenge');
 			this.challenging = null;
 			this.challengeMenuOpen = true;
 		} else {
 			this.challengeMenuOpen = false;
 		}
+		this.challenging = null;
+		this.teamSent = null;
 		this.update(null);
 	}
 	parseChallenge(challengeString: string | null): Challenge | null {
@@ -548,28 +637,30 @@ export class ChatRoom extends PSRoom {
 	updateChallenge(name: string, challengeString: string) {
 		const challenge = this.parseChallenge(challengeString);
 		const userid = toID(name);
+		if (this.args?.format) this.args.format = null;
+		this.teamSent = null;
 
-		if (userid === PS.user.userid) {
-			if (!challenge && !this.challenging) {
-				// this is also used for canceling challenges
-				this.challenged = null;
-			}
-			// we are sending the challenge
+		// Protocol documentation: https://github.com/smogon/pokemon-showdown-client/pull/1799
+
+		if (!challenge) {
+			// rejected or canceled.
+			// plausibly due to a server bug, SENDER may be wrong in this case
+			// (when we reject, we are SENDER; when we cancel, we are not)
+			this.challenged = null;
+			this.challenging = null;
+		} else if (userid === PS.user.userid) {
+			// we are SENDER
 			this.challenging = challenge;
+			this.challengeMenuOpen = false;
+			PS.mainmenu.lastChallenged = Date.now();
 		} else {
-			if (!challenge && !this.challenged) {
-				// this is also used for rejecting challenges
-				this.challenging = null;
-			}
+			// we are RECEIVER
 			this.challenged = challenge;
-			if (challenge) {
-				this.notify({
-					title: `Challenge from ${name}`,
-					body: `Format: ${BattleLog.formatName(challenge.formatName)}`,
-					id: 'challenge',
-				});
-				// app.playNotificationSound();
-			}
+			this.notify({
+				title: `Challenge from ${name}`,
+				body: `Format: ${BattleLog.formatName(challenge.formatName)}`,
+				id: 'challenge',
+			});
 		}
 		this.update(null);
 	}
@@ -643,11 +734,6 @@ export class ChatRoom extends PSRoom {
 	}
 
 	handleJoinLeave(action: 'join' | 'leave', name: string, silent: boolean) {
-		if (action === 'join') {
-			this.addUser(name);
-		} else if (action === 'leave') {
-			this.removeUser(name);
-		}
 		const showjoins = PS.prefs.showjoins?.[PS.server.id];
 		if (!(showjoins?.[this.id] ?? showjoins?.['global'] ?? !silent)) return;
 
@@ -703,7 +789,6 @@ export class ChatRoom extends PSRoom {
 	}
 
 	override destroy() {
-		if (this.pmTarget) this.connected = false;
 		if (this.battle) {
 			// since battle is defined here, we might as well deallocate it here
 			this.battle.destroy();
@@ -734,6 +819,19 @@ export class CopyableURLBox extends preact.Component<{ url: string }> {
 	}
 }
 
+interface UserAutoCompleteCandidate {
+	type: "user";
+	userid: string;
+	prefixIndex: number;
+}
+
+interface CmdAutoCompleteCandidate {
+	type: "command";
+	command: string;
+}
+
+export type AutoCompleteCandidate = UserAutoCompleteCandidate | CmdAutoCompleteCandidate;
+
 export class ChatTextEntry extends preact.Component<{
 	room: ChatRoom, onMessage: (msg: string, elem: HTMLElement) => void, onKey: (e: KeyboardEvent) => boolean,
 	left?: number, tinyLayout?: boolean,
@@ -744,7 +842,7 @@ export class ChatTextEntry extends preact.Component<{
 	history: string[] = [];
 	historyIndex = 0;
 	tabComplete: {
-		candidates: { userid: string, prefixIndex: number }[],
+		candidates: AutoCompleteCandidate[],
 		candidateIndex: number,
 		/** the text left of the cursor before tab completing */
 		prefix: string,
@@ -886,6 +984,7 @@ export class ChatTextEntry extends preact.Component<{
 	}
 	handleKey(ev: KeyboardEvent) {
 		const cmdKey = ((ev.metaKey ? 1 : 0) + (ev.ctrlKey ? 1 : 0) === 1) && !ev.altKey && !ev.shiftKey;
+		const altKey = ev.altKey;
 		// const anyModifier = ev.ctrlKey || ev.altKey || ev.metaKey || ev.shiftKey;
 		if (ev.keyCode === 13 && !ev.shiftKey) { // Enter key
 			return this.submit();
@@ -917,11 +1016,98 @@ export class ChatTextEntry extends preact.Component<{
 		// 	const newValue = `/pm ${PS.user.lastPM}, `;
 		// 	this.setValue(newValue, newValue.length);
 		// 	return true;
+		} else if (ev.shiftKey && ev.keyCode === 37 && !altKey) {
+			if (PS.prefs.onepanel === 'vertical' || this.getValue().length > 0) return;
+			const curLoc = PS.room.location;
+			let newLoc = curLoc;
+			let newIndex: number | null = null;
+			switch (curLoc) {
+			case 'right': {
+				newIndex = PS.rightRoomList.indexOf(PS.room.id) - 1;
+				if (newIndex < 0) {
+					newLoc = 'left';
+					newIndex = PS.leftRoomList.length + 1;
+				}
+				break;
+			}
+			case 'left': {
+				newIndex = PS.leftRoomList.indexOf(PS.room.id) - 1;
+				// newIndex <= 0 because MainMenu is always at 0 index
+				if (newIndex <= 0) {
+					newLoc = 'mini-window';
+					newIndex = PS.miniRoomList.length + 1;
+				}
+				break;
+			}
+			case 'mini-window': {
+				newIndex = PS.miniRoomList.indexOf(PS.room.id) - 1;
+				if (newIndex < 0) {
+					newLoc = 'right';
+					newIndex = PS.rightRoomList.length + 1;
+				}
+				break;
+			}
+			}
+			if (newIndex !== null) {
+				PS.moveRoom(PS.room, newLoc, false, newIndex);
+				PS.update();
+			}
+			return true;
+		} else if (ev.shiftKey && ev.keyCode === 39 && !altKey) {
+			if (PS.prefs.onepanel === 'vertical' || this.getValue().length > 0) return;
+			const curLoc = PS.room.location;
+			let newLoc = curLoc;
+			let newIndex: number | null = null;
+			switch (curLoc) {
+			case 'right': {
+				newIndex = PS.rightRoomList.indexOf(PS.room.id) + 1;
+				if (newIndex >= PS.rightRoomList.length - 1) {
+					// newIndex = 1 because NewsPanel is at 0
+					newLoc = 'mini-window';
+					newIndex = 1;
+				}
+				break;
+			}
+			case 'left': {
+				newIndex = PS.leftRoomList.indexOf(PS.room.id) + 1;
+				if (newIndex >= PS.leftRoomList.length) {
+					newLoc = 'right';
+					newIndex = 0;
+				}
+				break;
+			}
+			case 'mini-window': {
+				newIndex = PS.miniRoomList.indexOf(PS.room.id) + 1;
+				if (newIndex >= PS.miniRoomList.length) {
+					newLoc = 'left';
+					// newIndex = 1 because MainMenu is at 0
+					newIndex = 1;
+				}
+				break;
+			}
+			}
+			if (newIndex !== null) {
+				PS.moveRoom(PS.room, newLoc, false, newIndex);
+				PS.update();
+			}
+			return true;
+		} else if (ev.shiftKey && ev.keyCode === 38) {
+			if (PS.prefs.onepanel !== 'vertical' || this.getValue().length > 0) return;
+			let newIndex = PS.rightRoomList.indexOf(PS.room.id) - 1;
+			if (newIndex < 0) newIndex = PS.rightRoomList.length - 1;
+			PS.moveRoom(PS.room, 'right', false, newIndex);
+			PS.update();
+		} else if (ev.shiftKey && ev.keyCode === 40) {
+			if (PS.prefs.onepanel !== 'vertical' || this.getValue().length > 0) return;
+			let newIndex = PS.rightRoomList.indexOf(PS.room.id) + 1;
+			if (newIndex >= PS.rightRoomList.length - 1) newIndex = 0;
+			PS.moveRoom(PS.room, 'right', false, newIndex);
+			PS.update();
 		}
 		return false;
 	}
 	// TODO - add support for commands tabcomplete
-	handleTabComplete(reverse: boolean) {
+	handleTabComplete(reverse: boolean): boolean {
 		// Don't tab complete at the start of the text box.
 		let { value, start, end } = this.getSelection();
 		if (start !== end || end === 0) return false;
@@ -956,23 +1142,25 @@ export class ChatTextEntry extends preact.Component<{
 			const match2 = /^([\s\S!/]*?)([A-Za-z0-9][^, \n]* [^, ]*)$/.exec(prefix);
 			if (!match1 && !match2) return true;
 
+			const candidates: AutoCompleteCandidate[] = [];
 			const idprefix = (match1 ? toID(match1[2]) : '');
 			let spaceprefix = (match2 ? match2[2].replace(/[^A-Za-z0-9 ]+/g, '').toLowerCase() : '');
-			const candidates: { userid: string, prefixIndex: number }[] = [];
 			if (match2 && (match2[0] === '/' || match2[0] === '!')) spaceprefix = '';
 			for (const userid in users) {
 				if (spaceprefix && users[userid].slice(1).replace(/[^A-Za-z0-9 ]+/g, '')
 					.toLowerCase()
 					.startsWith(spaceprefix)) {
-					if (match2) candidates.push({ userid, prefixIndex: match2[1].length });
+					if (match2) candidates.push({ type: "user", userid, prefixIndex: match2[1].length });
 				} else if (idprefix && userid.startsWith(idprefix)) {
-					if (match1) candidates.push({ userid, prefixIndex: match1[1].length });
+					if (match1) candidates.push({ type: "user", userid, prefixIndex: match1[1].length });
 				}
 			}
 			// Sort by most recent to speak in the chat, or, in the case of a tie,
 			// in alphabetical order.
 			const userActivity = this.props.room.userActivity;
 			candidates.sort((a, b) => {
+				// command autocomplete options aren't added until after the user autocomplete options are sorted.
+				if (a.type !== "user" || b.type !== "user") return 0;
 				if (a.prefixIndex !== b.prefixIndex) {
 					// shorter prefix length comes first
 					return a.prefixIndex - b.prefixIndex;
@@ -984,6 +1172,28 @@ export class ChatTextEntry extends preact.Component<{
 				}
 				return (a.userid < b.userid) ? -1 : 1; // alphabetical order
 			});
+
+			const currentLine = prefix.substring(prefix.lastIndexOf('\n') + 1);
+			const isCommandSearch = (currentLine.startsWith('/') && !currentLine.startsWith('//')) || currentLine.startsWith('!');
+			if (isCommandSearch) {
+				PS.mainmenu.makeQuery('cmdsearch', currentLine, true).then((data: string[]) => {
+					const cmds = data.sort((a, b) => a.length < b.length ? 1 : -1);
+					const nextCmd = cmds[cmds.length - 1];
+					const newValue = nextCmd + value.substring(end);
+					this.setValue(newValue, nextCmd.length, nextCmd.length);
+					const currentCandidates = this.tabComplete?.candidates ?? [];
+					for (const cmd of cmds) {
+						currentCandidates.unshift({ type: "command", command: cmd });
+					}
+					this.tabComplete = {
+						candidates: currentCandidates,
+						candidateIndex: 0,
+						prefix: nextCmd,
+						cursor: nextCmd,
+					};
+				});
+				return true;
+			}
 
 			if (!candidates.length) {
 				this.tabComplete = null;
@@ -998,13 +1208,22 @@ export class ChatTextEntry extends preact.Component<{
 		}
 		// Substitute in the tab-completed name
 		const candidate = this.tabComplete.candidates[this.tabComplete.candidateIndex];
-		let name = users[candidate.userid];
-		if (!name) return true;
+		if (candidate.type === "user") {
+			let name = users[candidate.userid];
+			if (!name) return true;
 
-		name = Dex.getShortName(name.slice(1)); // Remove rank and busy characters
-		const cursor = this.tabComplete.prefix.slice(0, candidate.prefixIndex) + name;
-		this.setValue(cursor + value.slice(end), cursor.length);
-		this.tabComplete.cursor = cursor;
+			name = Dex.getShortName(name.slice(1)); // Remove rank and busy characters
+			const cursor = this.tabComplete.prefix.slice(0, candidate.prefixIndex) + name;
+			this.setValue(cursor + value.slice(end), cursor.length);
+			this.tabComplete.cursor = cursor;
+		} else {
+			const prefixIndex = prefix.lastIndexOf('\n') + 1;
+			const fullPrefix = prefix.substring(0, prefixIndex) + Dex.getShortName(candidate.command);
+			const newValue = fullPrefix + value.substring(end);
+			this.setValue(newValue, fullPrefix.length, fullPrefix.length);
+			this.tabComplete.cursor = fullPrefix;
+			this.tabComplete.prefix = fullPrefix;
+		}
 		return true;
 	}
 	undoTabComplete() {
@@ -1059,19 +1278,21 @@ export class ChatTextEntry extends preact.Component<{
 	override render() {
 		const { room } = this.props;
 		const OLD_TEXTBOX = false;
-		const canTalk = PS.user.named || room.id === 'dm-';
 		if (room.connected === 'client-only' && room.id.startsWith('battle-')) {
 			return <div
 				class="chat-log-add hasuserlist" onClick={this.focusIfNoSelection} style={{ left: this.props.left || 0 }}
 			><CopyableURLBox url={`https://psim.us/r/${room.id.slice(7)}`} /></div>;
 		}
+
+		const canTalk = PS.user.named || room.id === 'dm-';
+		const connected = room.connected === true || room.connected === 'client-only';
 		return <div
 			class="chat-log-add hasuserlist" onClick={this.focusIfNoSelection} style={{ left: this.props.left || 0 }}
 		>
 			<form class={`chatbox${this.props.tinyLayout ? ' nolabel' : ''}`} style={canTalk ? {} : { display: 'none' }}>
 				<label style={`color:${BattleLog.usernameColor(PS.user.userid)}`}>{PS.user.name}:</label>
 				{OLD_TEXTBOX ? <textarea
-					class={room.connected === true && canTalk ? 'textbox autofocus' : 'textbox disabled'}
+					class={connected && canTalk ? 'textbox autofocus' : 'textbox disabled'}
 					autofocus
 					rows={1}
 					onInput={this.update}
@@ -1079,7 +1300,7 @@ export class ChatTextEntry extends preact.Component<{
 					style={{ resize: 'none', width: '100%', height: '16px', padding: '2px 3px 1px 3px' }}
 					placeholder={PSView.focusPreview(room)}
 				/> : <ChatTextBox
-					disabled={room.connected !== true || !canTalk}
+					disabled={!connected || !canTalk}
 					placeholder={PSView.focusPreview(room)}
 				/>}
 			</form>
@@ -1156,12 +1377,7 @@ class ChatPanel extends PSRoomPanel<ChatRoom> {
 		if (!room.pmTarget) throw new Error("Not a PM room");
 		PS.send(`/utm ${packedTeam}`);
 		PS.send(`${privacy}/challenge ${room.pmTarget}, ${format}`);
-		room.challengeMenuOpen = false;
-		room.challenging = {
-			formatName: format,
-			teamFormat: format,
-		};
-		PS.mainmenu.lastChallenged = now;
+		room.teamSent = format || '-';
 		room.update(null);
 	};
 	acceptChallenge = (e: Event, format: string, team?: Team) => {
@@ -1170,7 +1386,7 @@ class ChatPanel extends PSRoomPanel<ChatRoom> {
 		if (!room.pmTarget) throw new Error("Not a PM room");
 		PS.send(`/utm ${packedTeam}`);
 		this.props.room.send(`/accept`);
-		room.challenged = null;
+		room.teamSent = format || '-';
 		room.update(null);
 	};
 
@@ -1178,36 +1394,57 @@ class ChatPanel extends PSRoomPanel<ChatRoom> {
 		const room = this.props.room;
 		const tinyLayout = room.width < 450;
 
-		const challengeTo = room.challenging ? <div class="challenge">
+		const defaultFormat = room.args?.format as string | undefined;
+		if (defaultFormat?.startsWith('!!')) {
+			room.args!.format = undefined;
+		}
+
+		const challengeSent = room.teamSent && !room.challenged;
+		const challengeTo = room.challenging ? <div class="challenge outgoing">
 			<p>Waiting for {room.pmTarget}...</p>
-			<TeamForm format={room.challenging.formatName} teamFormat={room.challenging.teamFormat} onSubmit={null}>
+			<TeamForm
+				format={room.challenging.formatName} teamFormat={room.challenging.teamFormat}
+				onSubmit={null} selectType="challenge"
+			>
 				<button data-cmd="/cancelchallenge" class="button">Cancel</button>
 			</TeamForm>
-		</div> : room.challengeMenuOpen ? <div class="challenge">
-			<TeamForm onSubmit={this.makeChallenge}>
-				<button type="submit" class="button button-first">
+		</div> : room.challengeMenuOpen ? <div class="challenge outgoing">
+			<TeamForm onSubmit={this.makeChallenge} defaultFormat={defaultFormat} selectType="challenge">
+				{challengeSent && <button class="button" disabled>
+					Challenging...
+				</button>}
+				{!challengeSent && <button type="submit" class="button button-first" disabled={!!room.challenged}>
 					<strong>Challenge</strong>
-				</button><button data-href="battleoptions" class="button button-last" aria-label="Battle options">
+				</button>}
+				{!challengeSent && <button data-href="battleoptions" class="button button-last" aria-label="Battle options">
 					<i class="fa fa-caret-down" aria-hidden></i>
-				</button> {}
+				</button>} {}
 				<button data-cmd="/cancelchallenge" class="button">Cancel</button>
 			</TeamForm>
 		</div> : null;
 
 		const challengeFrom = room.challenged ? <div class="challenge">
 			{!!room.challenged.message && <p>{room.challenged.message}</p>}
-			<TeamForm format={room.challenged.formatName} teamFormat={room.challenged.teamFormat} onSubmit={this.acceptChallenge}>
-				<button type="submit" class={room.challenged.formatName ? `button button-first` : `button`}>
+			<TeamForm
+				format={room.challenged.formatName} teamFormat={room.challenged.teamFormat}
+				onSubmit={this.acceptChallenge} selectType="challenge"
+			>
+				{room.teamSent && <button class="button" disabled>
+					Accepting...
+				</button>}
+				{!room.teamSent && <button type="submit" class={room.challenged.formatName ? `button button-first` : `button`}>
 					<strong>{room.challenged.acceptButtonLabel || 'Accept'}</strong>
-				</button>
-				{room.challenged.formatName && <button data-href="battleoptions" class="button button-last" aria-label="Battle options">
+				</button>}
+				{!room.teamSent && room.challenged.formatName && <button
+					data-href="battleoptions" class="button button-last" aria-label="Battle options"
+				>
 					<i class="fa fa-caret-down" aria-hidden></i>
 				</button>} {}
 				<button data-cmd="/reject" class="button">{room.challenged.rejectButtonLabel || 'Reject'}</button>
 			</TeamForm>
 		</div> : null;
 
-		return <PSPanelWrapper room={room} focusClick fullSize>
+		return <PSPanelWrapper room={room} focusClick noScroll fullSize>
 			<ChatLog
 				class={`chat-log${tinyLayout ? '' : ' hasuserlist'}`} room={this.props.room}
 				left={tinyLayout ? 0 : 146} top={room.tour?.info.isActive ? 30 : 0}

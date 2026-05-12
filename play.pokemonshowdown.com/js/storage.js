@@ -55,8 +55,9 @@ Storage.bg = {
 		if (!bgid) {
 			if (location.host === 'smogtours.psim.us') {
 				bgid = 'shaymin';
-			} else if (location.host === Config.routes.client) {
-				bgid = ['horizon', 'ocean', 'waterfall', 'shaymin', 'charizards', 'psday'][Math.floor(Math.random() * 6)];
+			} else if (location.host === Config.routes.client || bgid === 'waterfall') {
+				var bgs = ['horizon', 'ocean', 'shaymin', 'charizards', 'psday'];
+				bgid = bgs[Math.floor(Math.random() * bgs.length)];
 			} else {
 				$(document.body).css({
 					background: '',
@@ -96,10 +97,6 @@ Storage.bg = {
 			case 'ocean':
 				hues = ["82.8169014084507,34.63414634146342%", "216.16438356164383,29.55465587044534%", "212.92682926829266,59.42028985507245%", "209.18918918918916,57.51295336787566%", "199.2857142857143,48.275862068965495%", "213.11999999999998,55.06607929515419%"];
 				attrib = '<a href="https://quanyails.deviantart.com/art/Sunrise-Ocean-402667154" target="_blank" class="subtle">"Sunrise Ocean" <small>background by Quanyails</small></a>';
-				break;
-			case 'waterfall':
-				hues = ["119.31034482758622,37.66233766233767%", "184.36363636363635,23.012552301255226%", "108.92307692307692,37.14285714285714%", "70.34482758620689,20.567375886524818%", "98.39999999999998,36.76470588235296%", "140,38.18181818181818%"];
-				attrib = '<a href="https://x.com/Yilxaevum" target="_blank" class="subtle">"Irie" <small>background by Samuel Teo</small></a>';
 				break;
 			case 'shaymin':
 				hues = ["39.000000000000064,21.7391304347826%", "170.00000000000003,2.380952380952378%", "157.5,11.88118811881188%", "174.78260869565216,12.041884816753928%", "185.00000000000003,12.76595744680851%", "20,5.660377358490567%"];
@@ -1366,7 +1363,7 @@ Storage.exportAllTeams = function () {
 	for (var i = 0, len = Storage.teams.length; i < len; i++) {
 		var team = Storage.teams[i];
 		buf += '=== ' + (team.format ? '[' + team.format + (team.capacity === 24 ? '-box] ' : '] ') : '') + (team.folder ? '' + team.folder + '/' : '') + team.name + ' ===\n\n';
-		buf += Storage.exportTeam(team.team, team.gen);
+		buf += Storage.exportTeam(team.team);
 		buf += '\n';
 	}
 	return buf;
@@ -1377,13 +1374,13 @@ Storage.exportFolder = function (folder) {
 		var team = Storage.teams[i];
 		if (team.folder + "/" === folder || team.format === folder) {
 			buf += '=== ' + (team.format ? '[' + team.format + (team.capacity === 24 ? '-box] ' : '] ') : '') + (team.folder ? '' + team.folder + '/' : '') + team.name + ' ===\n\n';
-			buf += Storage.exportTeam(team.team, team.gen);
+			buf += Storage.exportTeam(team.team);
 			buf += '\n';
 		}
 	}
 	return buf;
 };
-Storage.exportTeam = function (team, gen, hidestats) {
+Storage.exportTeam = function (team, hidestats) {
 	if (!team) return "";
 	if (typeof team === 'string') {
 		if (team.indexOf('\n') >= 0) return team;
@@ -1427,9 +1424,8 @@ Storage.exportTeam = function (team, gen, hidestats) {
 		if (curSet.gigantamax) {
 			text += 'Gigantamax: Yes  \n';
 		}
-		if (gen === 9) {
-			var species = Dex.species.get(curSet.species);
-			text += 'Tera Type: ' + (curSet.teraType || species.requiredTeraType || species.types[0]) + "  \n";
+		if (curSet.teraType) {
+			text += 'Tera Type: ' + curSet.teraType + '  \n';
 		}
 		if (!hidestats) {
 			var first = true;
@@ -1773,7 +1769,7 @@ Storage.nwSaveTeam = function (team) {
 		this.nwDeleteTeam(team);
 	}
 	team.filename = filename;
-	fs.writeFile(this.dir + 'Teams/' + filename, Storage.exportTeam(team.team, team.gen).replace(/\n/g, '\r\n'), function () {});
+	fs.writeFile(this.dir + 'Teams/' + filename, Storage.exportTeam(team.team).replace(/\n/g, '\r\n'), function () {});
 };
 
 Storage.nwSaveTeams = function () {
@@ -1809,7 +1805,7 @@ Storage.nwDoSaveAllTeams = function () {
 		filename = $.trim(filename).replace(/[\\\/]+/g, '');
 
 		team.filename = filename;
-		fs.writeFile(this.dir + 'Teams/' + filename, Storage.exportTeam(team.team, team.gen).replace(/\n/g, '\r\n'), function () {});
+		fs.writeFile(this.dir + 'Teams/' + filename, Storage.exportTeam(team.team).replace(/\n/g, '\r\n'), function () {});
 	}
 };
 

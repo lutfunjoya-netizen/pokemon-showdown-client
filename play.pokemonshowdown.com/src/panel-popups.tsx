@@ -1,5 +1,5 @@
 import preact from "../js/lib/preact";
-import { toID, toRoomid, toUserid, Dex } from "./battle-dex";
+import { toID, toRoomid, toUserid, Dex, PSUtils } from "./battle-dex";
 import type { ID } from "./battle-dex-data";
 import { BattleLog } from "./battle-log";
 import { PSLoginServer } from "./client-connection";
@@ -230,7 +230,7 @@ class UserOptionsPanel extends PSRoomPanel {
 		data?: Record<string, string>,
 	};
 	getTargets() {
-		const [, targetUser, targetRoomid] = this.props.room.id.split('-');
+		const [, targetUser, targetRoomid] = PSUtils.splitFirst(this.props.room.id, '-', 2);
 		let targetRoom = (PS.rooms[targetRoomid] || null) as ChatRoom | null;
 		if (targetRoom?.type !== 'chat') targetRoom = targetRoom?.getParent() as ChatRoom;
 		if (targetRoom?.type !== 'chat') targetRoom = targetRoom?.getParent() as ChatRoom;
@@ -1354,10 +1354,6 @@ class BackgroundListPanel extends PSRoomPanel {
 					<span class="bg" style="background-position: 0 -90px"></span>{}
 					Horizon
 				</button>
-				<button onClick={this.setBg} value="waterfall" class={option('waterfall')}>
-					<span class="bg" style="background-position: 0 -180px"></span>{}
-					Waterfall
-				</button>
 				<button onClick={this.setBg} value="ocean" class={option('ocean')}>
 					<span class="bg" style="background-position: 0 -270px"></span>{}
 					Ocean
@@ -1567,6 +1563,14 @@ class BattleOptionsPanel extends PSRoomPanel {
 			}
 			break;
 		}
+		case 'autohardcore': {
+			PS.prefs.set('autohardcore', value);
+			if (room?.battle) {
+				room.battle.setHardcoreMode(value);
+				room.update(null);
+			}
+			break;
+		}
 		case 'ignoreopp': {
 			PS.prefs.set('ignoreopp', value);
 			this.handleIgnoreOpponent(value);
@@ -1680,6 +1684,14 @@ class BattleOptionsPanel extends PSRoomPanel {
 					/> Automatically start timer
 				</label>
 			</p>
+			<p>
+				<label class="checkbox">
+					<input
+						name="autohardcore" checked={PS.prefs.autohardcore || false}
+						type="checkbox" onChange={this.handleAllSettings}
+					/> Automatically enable hardcore mode
+				</label>
+			</p>
 			{!PS.prefs.onepanel && document.body.offsetWidth >= 800 && <p>
 				<label class="checkbox">
 					<input
@@ -1745,7 +1757,9 @@ class PopupPanel extends PSRoomPanel<PopupRoom> {
 		const cancelButton = room.args?.cancelButton as string | undefined;
 		const otherButtons = room.args?.otherButtons as preact.ComponentChildren;
 		const value = room.args?.value as string | undefined;
-		const type = (room.args?.type || (typeof value === 'string' ? 'text' : null)) as string | null;
+		let type = (room.args?.type || (typeof value === 'string' ? 'text' : null)) as string | null;
+		const inputMode = type === 'numeric' ? 'numeric' : undefined;
+		if (type === 'numeric') type = 'text';
 		const message = room.args?.message;
 		return <PSPanelWrapper room={room} width={room.args?.width as number || 480}>
 			<form class="pad" onSubmit={this.handleSubmit}>
@@ -1753,7 +1767,9 @@ class PopupPanel extends PSRoomPanel<PopupRoom> {
 					style="white-space:pre-wrap;word-wrap:break-word"
 					dangerouslySetInnerHTML={{ __html: this.parseMessage(message as string || '') }}
 				></p>}
-				{!!type && <p><input name="value" type={type} class="textbox autofocus" style="width:100%;box-sizing:border-box" /></p>}
+				{!!type && <p><input
+					name="value" type={type} inputMode={inputMode} class="textbox autofocus" style="width:100%;box-sizing:border-box"
+				/></p>}
 				<p class="buttonbar">
 					<button class={`button${!type ? ' autofocus' : ''}`} type="submit" style="min-width:50px">
 						<strong>{okButton}</strong>

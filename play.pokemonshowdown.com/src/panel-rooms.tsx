@@ -8,7 +8,7 @@
 import { PS, PSRoom, type RoomID, type RoomOptions } from "./client-main";
 import { PSPanelWrapper, PSRoomPanel } from "./panels";
 import type { RoomInfo } from "./panel-mainmenu";
-import { toID } from "./battle-dex";
+import { Dex, toID } from "./battle-dex";
 
 export class RoomsRoom extends PSRoom {
 	override readonly classType: string = 'rooms';
@@ -190,26 +190,26 @@ class RoomsPanel extends PSRoomPanel {
 	override render() {
 		if (this.hidden && PS.isVisible(this.props.room)) this.hidden = false;
 		if (this.hidden) {
-			return <PSPanelWrapper room={this.props.room} scrollable>{null}</PSPanelWrapper>;
+			return <PSPanelWrapper room={this.props.room}>{null}</PSPanelWrapper>;
 		}
 		const rooms = PS.mainmenu.roomsCache;
 		this.updateRoomList();
 
-		return <PSPanelWrapper room={this.props.room} scrollable><div class="pad">
+		return <PSPanelWrapper room={this.props.room}><div class="pad">
 			<button class="button" style="float:right;font-size:10pt;margin-top:3px" onClick={this.hide}>
 				<i class="fa fa-caret-right" aria-hidden></i> Hide
 			</button>
 			<div class="roomcounters">
 				<a class="button" href="users" title="Find an online user">
 					<span
-						class="pixelated usercount"
+						class={`pixelated usercount${Dex.afdMode === true ? ' afd' : ''}`}
 						title="Meloetta is PS's mascot! The Aria forme is about using its voice, and represents our chatrooms."
 					></span>
 					<strong>{rooms.userCount || '-'}</strong> users online
 				</a> {}
 				<a class="button" href="battles" title="Watch an active battle">
 					<span
-						class="pixelated battlecount"
+						class={`pixelated battlecount${Dex.afdMode ? ' afd' : ''}`}
 						title="Meloetta is PS's mascot! The Pirouette forme is Fighting-type, and represents our battles."
 					></span>
 					<strong>{rooms.battleCount || '-'}</strong> active battles

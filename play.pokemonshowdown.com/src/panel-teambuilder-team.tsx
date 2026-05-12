@@ -64,6 +64,11 @@ class TeamRoom extends PSRoom {
 		team.uploadedPackedTeam = exported;
 		this.update(null);
 	}
+	cancelUpload() {
+		PS.teams.uploading = null;
+		this.team.uploadedPackedTeam = undefined;
+		this.update(null);
+	}
 	stripNicknames(packedTeam: string) {
 		const team = Teams.unpack(packedTeam);
 		for (const pokemon of team) {
@@ -214,7 +219,7 @@ class TeamPanel extends PSRoomPanel<TeamRoom> {
 		}
 
 		const unsaved = team.uploaded && team.uploadedPackedTeam ? team.uploadedPackedTeam !== team.packedTeam : false;
-		return <PSPanelWrapper room={room} scrollable><div class="pad">
+		return <PSPanelWrapper room={room}><div class="pad">
 			<a class="button" href="teambuilder" data-target="replace">
 				<i class="fa fa-chevron-left" aria-hidden></i> Teams
 			</a> {}
@@ -357,7 +362,7 @@ class ViewTeamPanel extends PSRoomPanel {
 			</PSPanelWrapper>;
 		}
 
-		return <PSPanelWrapper room={room} scrollable><div class="pad">
+		return <PSPanelWrapper room={room}><div class="pad">
 			<h1>{team.name || "Untitled team"}</h1>
 			<CopyableURLBox
 				url={`https://psim.us/t/${team.teamid!}${teamData.private ? '-' + teamData.private : ''}`}

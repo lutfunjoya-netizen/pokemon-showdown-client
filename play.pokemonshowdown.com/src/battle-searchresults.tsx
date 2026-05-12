@@ -128,8 +128,8 @@ export class PSSearchResults extends preact.Component<{
 				<span class="col statcol"><em>HP</em><br />{stats.hp}</span>
 				<span class="col statcol"><em>Atk</em><br />{stats.atk}</span>
 				<span class="col statcol"><em>Def</em><br />{stats.def}</span>
-				{search.dex.gen > 2 && <span class="col statcol"><em>SpA</em><br />{stats.spa}</span>}
-				{search.dex.gen > 2 && <span class="col statcol"><em>SpD</em><br />{stats.spd}</span>}
+				{search.dex.gen >= 2 && <span class="col statcol"><em>SpA</em><br />{stats.spa}</span>}
+				{search.dex.gen >= 2 && <span class="col statcol"><em>SpD</em><br />{stats.spd}</span>}
 				{search.dex.gen < 2 && <span class="col statcol"><em>Spc</em><br />{stats.spa}</span>}
 				<span class="col statcol"><em>Spe</em><br />{stats.spe}</span>
 				<span class="col bstcol"><em>BST<br />{bst}</em></span>
@@ -242,6 +242,10 @@ export class PSSearchResults extends preact.Component<{
 
 		let pp = (move.pp === 1 || move.noPPBoosts ? move.pp : move.pp * 8 / 5);
 		if (search.dex.gen < 3) pp = Math.min(61, pp);
+		if (search.dex.modid === 'champions') {
+			pp = move.pp > 20 ? 20 : pp;
+			if (!move.noPPBoosts) pp = (pp / 5 + 1) * 4;
+		}
 		return <li class="result"><a
 			href={`${this.URL_ROOT}moves/${id}`} class={this.moveIds.includes(id) ? 'cur' : ''}
 			data-target="push" data-entry={entry}

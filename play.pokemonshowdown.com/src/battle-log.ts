@@ -118,7 +118,7 @@ export class BattleLog {
 		const button = el.getElementsByTagName('button')[0];
 		button?.addEventListener?.('click', e => {
 			e.preventDefault();
-			this.scene?.battle.seekTurn(this.scene.battle.turn - 100);
+			this.scene?.battle.seekBy(-100);
 		});
 		this.addNode(el);
 	}
@@ -1015,6 +1015,7 @@ export class BattleLog {
 	hideChatFrom(userid: ID, showRevealButton = true, lineCount = 0) {
 		const classStart = 'chat chatmessage-' + userid + ' ';
 		let nodes: HTMLElement[] = [];
+		const lastChild = this.innerElem.lastChild;
 		for (const node of this.innerElem.childNodes as any as HTMLElement[]) {
 			if (node.className && (node.className + ' ').startsWith(classStart)) {
 				nodes.push(node);
@@ -1033,15 +1034,15 @@ export class BattleLog {
 			node.style.display = 'none';
 			node.className = 'revealed ' + node.className;
 		}
-		if (!nodes.length || !showRevealButton) return;
+		if (!nodes.length || !showRevealButton || !lastChild) return;
 		const button = document.createElement('button');
 		button.name = 'toggleMessages';
+		button.setAttribute('data-cmd', '/togglemessages ' + userid);
 		button.value = userid;
 		button.className = 'subtle';
 		button.innerHTML = `<small>(${nodes.length} line${nodes.length > 1 ? 's' : ''} from ${userid} hidden)</small>`;
-		const lastNode = nodes[nodes.length - 1];
-		lastNode.appendChild(document.createTextNode(' '));
-		lastNode.appendChild(button);
+		lastChild.appendChild(document.createTextNode(' '));
+		lastChild.appendChild(button);
 	}
 
 	static unlinkNodeList(nodeList: ArrayLike<HTMLElement>, classStart: string) {
@@ -1085,6 +1086,17 @@ export class BattleLog {
 				'<br />Custom rules: ' + this.escapeHTML(formatid.slice(atIndex + 3));
 		}
 		return this.escapeHTML(this.formatName(formatid, fixGen6));
+	}
+	static formatId(format: string): ID {
+		const atIndex = format.indexOf('@@@');
+		if (atIndex >= 0) {
+			format = toID(format.slice(0, atIndex)) + format.slice(atIndex).trim();
+		} else {
+			format = toID(format);
+		}
+		if (!format) return '' as ID;
+		if (!format.startsWith('gen')) format = `${Dex.modid}${format}`;
+		return format as ID;
 	}
 	/**
 	 * Do not store this output anywhere; it removes the generation number
@@ -1226,10 +1238,10 @@ export class BattleLog {
 		if (!/[A-Za-z0-9]/.test(name.charAt(0))) {
 			// Backwards compatibility
 			group = name.charAt(0);
-			name = name.substr(1);
+			name = name.slice(1);
 		}
 		const colorStyle = ` style="color:${BattleLog.usernameColor(toID(name))}"`;
-		const clickableName = `<small class="groupsymbol">${BattleLog.escapeHTML(group)}</small><span class="username">${BattleLog.escapeHTML(name)}</span>`;
+		const clickableName = `<span class="username"><small class="groupsymbol">${BattleLog.escapeHTML(group)}</small>${BattleLog.escapeHTML(name)}</span>`;
 		const isMine = (window.app?.user?.get('name') === name) || (window.PS?.user.name === name);
 		const hlClass = isHighlighted ? ' highlighted' : '';
 		const mineClass = isMine ? ' mine' : '';
@@ -1284,7 +1296,7 @@ export class BattleLog {
 		case 'data-move':
 			return ['chat message-error', '[outdated code no longer supported]'];
 		case 'text':
-			return ['chat', BattleLog.parseMessage(target)];
+			return ['chat', BattleLog.parseMessage(target), true];
 		case 'error':
 			return ['chat message-error', formatText(target, true)];
 		case 'html':
