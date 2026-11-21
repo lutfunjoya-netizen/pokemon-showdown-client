@@ -20,7 +20,7 @@ function includeHeaderTop() {
 
 <title><?= $pageTitle ?> - Pok&eacute;mon Showdown!</title>
 
-<link rel="stylesheet" href="/style/global.css?v16" />
+<link rel="stylesheet" href="/style/global.css?v17" />
 
 <!-- Global site tag (gtag.js) - Google Analytics -->
 <script async src="https://www.googletagmanager.com/gtag/js?id=UA-26211653-1"></script>
@@ -70,7 +70,7 @@ function includeFooter() {
 
 <footer>
 	<p>
-		<small><a href="/rules">Rules</a> | <a href="/privacy">Privacy policy</a> | <a href="/credits"<?php classCurPage('credits') ?>>Credits</a> | <a href="/contact">Contact</a></small>
+		<small><a href="/rules">Rules</a> | <a href="/credits"<?php classCurPage('credits') ?>>Credits</a> | <a href="/privacy">Privacy</a> | <a href="/contact">Contact</a></small>
 	</p>
 </footer>
 <?php
